@@ -14,29 +14,29 @@ export interface UniversalGroupData {
   subject: string;
   subjectOwner?: string;
   subjectTime?: number;
-  creationTime: number;
+  creationTime?: number;
   owner?: string;
   desc?: string;
   descId?: string;
   descOwner?: string;
   descTime?: number;
-  restrict: boolean; // True if only admins can edit settings
-  announce: boolean; // True if muted (only admins can send messages)
-  memberAddMode: boolean; // True if all members can add people, false if admin only
+  restrict: boolean;
+  announce: boolean;
+  memberAddMode: boolean;
   size: number;
-  participants: {
+  participants: Array<{
     id: string;
-    admin: 'admin' | 'superadmin' | null;
+    admin: string | null;
     countryPrefix: string;
-  }[];
-  ephemeralDuration?: number; // Disappearing messages duration in seconds
+  }>;
+  ephemeralDuration?: number;
   inviteCode?: string;
-  pendingRequestsCount?: number;
-  pendingParticipants?: {
+  pendingRequestsCount: number;
+  pendingParticipants: Array<{
     jid: string;
     requestTime?: number;
     countryPrefix: string;
-  }[];
+  }>;
 }
 
 // ==========================================
