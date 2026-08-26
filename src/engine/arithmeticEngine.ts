@@ -332,7 +332,10 @@ export async function executePolynomialTasks(
       }
 
       case 'FETCH_GROUP_INFO': {
-        const creationDate = new Date(groupData.creationTime * 1000).toLocaleDateString();
+        const creationDate = groupData.creationTime 
+          ? new Date(groupData.creationTime * 1000).toLocaleDateString() 
+          : 'Unknown Date';
+          
         executionResults.push(
           `${taskTag}: Group Name: "${groupData.subject}" | Created: ${creationDate} | Members: ${groupData.size} | AntiLink: ${getGroupState(groupJid).antiLink === 1 ? 'ON' : 'OFF'}`
         );
