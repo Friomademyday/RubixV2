@@ -53,7 +53,13 @@ export async function isParticipantAdmin(
 ): Promise<boolean> {
   try {
     const metadata: GroupMetadata = await sock.groupMetadata(groupJid);
-    const participant = metadata.participants.find((p) => p.id === participantJid);
+    const cleanTarget = participantJid.split('@')[0].split(':')[0];
+
+    const participant = metadata.participants.find((p) => {
+      const cleanP = p.id.split('@')[0].split(':')[0];
+      return cleanP === cleanTarget;
+    });
+
     return participant?.admin === 'admin' || participant?.admin === 'superadmin';
   } catch (error) {
     console.error(`Error checking if ${participantJid} is admin:`, error);
@@ -61,11 +67,8 @@ export async function isParticipantAdmin(
   }
 }
 
-/**
- * Checks if the bot itself is an admin in the specified group.
- */
 export async function isBotAdmin(sock: WASocket, groupJid: string): Promise<boolean> {
-  const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+  const botJid = sock.user?.id ? sock.user.id.split('@')[0].split(':')[0] + '@s.whatsapp.net' : '';
   if (!botJid) return false;
   return isParticipantAdmin(sock, groupJid, botJid);
 }
