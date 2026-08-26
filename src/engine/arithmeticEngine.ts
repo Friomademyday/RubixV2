@@ -261,7 +261,8 @@ export async function executePolynomialTasks(
       }
 
       case 'ACCEPT_PENDING_REQUESTS': {
-        const amountToAccept = task.parameters?.amount;
+        const rawAmount = task.parameters?.amount;
+        const amountToAccept = typeof rawAmount === 'number' ? rawAmount : undefined;
         const result = await handlePendingRequests(sock, groupJid, 'approve', amountToAccept);
         executionResults.push(
           `${taskTag}: Successfully approved ${result.processedCount} pending request(s).`
@@ -270,7 +271,8 @@ export async function executePolynomialTasks(
       }
 
       case 'REJECT_PENDING_REQUESTS': {
-        const amountToReject = task.parameters?.amount;
+        const rawAmount = task.parameters?.amount;
+        const amountToReject = typeof rawAmount === 'number' ? rawAmount : undefined;
         const result = await handlePendingRequests(sock, groupJid, 'reject', amountToReject);
         executionResults.push(
           `${taskTag}: Successfully rejected ${result.processedCount} pending request(s).`
