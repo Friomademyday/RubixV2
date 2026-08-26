@@ -1,234 +1,556 @@
-import { WASocket, WAMessage, downloadMediaMessage } from '@whiskeysockets/baileys';
+import {
+  WASocket,
+  WAMessage,
+  GroupMetadata,
+  downloadMediaMessage,
+  WA_DEFAULT_EPHEMERAL
+} from '@whiskeysockets/baileys';
 
-export async function updateGroupSubject(sock: WASocket, jid: string, newName: string): Promise<boolean> {
+/**
+ * Universal Group Data Response Interface
+ */
+export interface UniversalGroupData {
+  id: string;
+  subject: string;
+  subjectOwner?: string;
+  subjectTime?: number;
+  creationTime: number;
+  owner?: string;
+  desc?: string;
+  descId?: string;
+  descOwner?: string;
+  descTime?: number;
+  restrict: boolean; // True if only admins can edit settings
+  announce: boolean; // True if muted (only admins can send messages)
+  memberAddMode: boolean; // True if all members can add people, false if admin only
+  size: number;
+  participants: {
+    id: string;
+    admin: 'admin' | 'superadmin' | null;
+    countryPrefix: string;
+  }[];
+  ephemeralDuration?: number; // Disappearing messages duration in seconds
+  inviteCode?: string;
+  pendingRequestsCount?: number;
+  pendingParticipants?: {
+    jid: string;
+    requestTime?: number;
+    countryPrefix: string;
+  }[];
+}
+
+// ==========================================
+// 1. ADMIN PERMISSION & VERIFICATION CHECKS
+// ==========================================
+
+/**
+ * Checks if a specific participant JID is an admin or superadmin in the group.
+ */
+export async function isParticipantAdmin(
+  sock: WASocket,
+  groupJid: string,
+  participantJid: string
+): Promise<boolean> {
   try {
-    await sock.groupUpdateSubject(jid, newName);
-    return true;
-  } catch (err) {
-    console.error('Failed to update group subject:', err);
+    const metadata: GroupMetadata = await sock.groupMetadata(groupJid);
+    const participant = metadata.participants.find((p) => p.id === participantJid);
+    return participant?.admin === 'admin' || participant?.admin === 'superadmin';
+  } catch (error) {
+    console.error(`Error checking if ${participantJid} is admin:`, error);
     return false;
   }
 }
 
-export async function updateGroupDescription(sock: WASocket, jid: string, newDesc: string): Promise<boolean> {
+/**
+ * Checks if the bot itself is an admin in the specified group.
+ */
+export async function isBotAdmin(sock: WASocket, groupJid: string): Promise<boolean> {
+  const botJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+  if (!botJid) return false;
+  return isParticipantAdmin(sock, groupJid, botJid);
+}
+
+// ==========================================
+// 2. UNIVERSAL GROUP DATA FETCHING
+// ==========================================
+
+/**
+ * Retrieves full universal metadata, member stats, pending requests, and invite codes.
+ */
+export async function getUniversalGroupData(
+  sock: WASocket,
+  groupJid: string
+): Promise<UniversalGroupData> {
+  const metadata: GroupMetadata = await sock.groupMetadata(groupJid);
+
+  // Extract country prefixes from JIDs
+  const processedParticipants = metadata.participants.map((p) => {
+    const cleanNumber = p.id.split('@')[0];
+    return {
+      id: p.id,
+      admin: p.admin || null,
+      countryPrefix: extractCountryPrefix(cleanNumber)
+    };
+  });
+
+  // Attempt to fetch pending join requests if supported by WhatsApp group state
+  let pendingList: any[] = [];
   try {
-    await sock.groupUpdateDescription(jid, newDesc);
-    return true;
+    const pendingRequests = await sock.groupRequestParticipantsList(groupJid);
+    pendingList = (pendingRequests || []).map((req: any) => {
+      const cleanNumber = req.jid.split('@')[0];
+      return {
+        jid: req.jid,
+        requestTime: req.request_time ? parseInt(req.request_time) : undefined,
+        countryPrefix: extractCountryPrefix(cleanNumber)
+      };
+    });
   } catch (err) {
-    console.error('Failed to update group description:', err);
+    // If bot isn't admin or group doesn't have join approval active
+    pendingList = [];
+  }
+
+  // Attempt to fetch invite code
+  let code: string | undefined = undefined;
+  try {
+    code = await sock.groupInviteCode(groupJid);
+  } catch (err) {
+    code = undefined;
+  }
+
+  return {
+    id: metadata.id,
+    subject: metadata.subject,
+    subjectOwner: metadata.subjectOwner,
+    subjectTime: metadata.subjectTime,
+    creationTime: metadata.creation,
+    owner: metadata.owner || metadata.subjectOwner,
+    desc: metadata.desc,
+    descId: metadata.descId,
+    descOwner: metadata.descOwner,
+    descTime: metadata.descTime,
+    restrict: !!metadata.restrict,
+    announce: !!metadata.announce,
+    memberAddMode: metadata.memberAddMode === 'all_member_add',
+    size: metadata.size || metadata.participants.length,
+    participants: processedParticipants,
+    ephemeralDuration: metadata.ephemeralDuration,
+    inviteCode: code ? `https://chat.whatsapp.com/${code}` : undefined,
+    pendingRequestsCount: pendingList.length,
+    pendingParticipants: pendingList
+  };
+}
+
+// Helper utility to parse country phone prefix
+function extractCountryPrefix(phoneNumber: string): string {
+  // Known 1, 2, and 3 digit country code matching
+  if (phoneNumber.startsWith('1')) return '1'; // USA/Canada
+  if (phoneNumber.startsWith('234')) return '234'; // Nigeria
+  if (phoneNumber.startsWith('92')) return '92'; // Pakistan
+  if (phoneNumber.startsWith('44')) return '44'; // UK
+  if (phoneNumber.startsWith('91')) return '91'; // India
+  if (phoneNumber.startsWith('254')) return '254'; // Kenya
+  if (phoneNumber.startsWith('27')) return '27'; // South Africa
+  return phoneNumber.substring(0, 3); // Fallback to first 3 digits
+}
+
+// ==========================================
+// 3. MEMBER & PARTICIPANT ACTIONS
+// ==========================================
+
+/**
+ * Removes (kicks) a array of target participant JIDs from the group.
+ */
+export async function kickParticipants(
+  sock: WASocket,
+  groupJid: string,
+  targetJids: string[]
+): Promise<boolean> {
+  try {
+    await sock.groupParticipantsUpdate(groupJid, targetJids, 'remove');
+    return true;
+  } catch (error) {
+    console.error(`Failed to kick participants from ${groupJid}:`, error);
     return false;
   }
 }
 
-export async function updateGroupPfp(sock: WASocket, jid: string, msg: WAMessage): Promise<boolean> {
+/**
+ * Promotes participants to Group Admin status.
+ */
+export async function promoteParticipants(
+  sock: WASocket,
+  groupJid: string,
+  targetJids: string[]
+): Promise<boolean> {
+  try {
+    await sock.groupParticipantsUpdate(groupJid, targetJids, 'promote');
+    return true;
+  } catch (error) {
+    console.error(`Failed to promote participants in ${groupJid}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Demotes group admins back to standard participants.
+ */
+export async function demoteParticipants(
+  sock: WASocket,
+  groupJid: string,
+  targetJids: string[]
+): Promise<boolean> {
+  try {
+    await sock.groupParticipantsUpdate(groupJid, targetJids, 'demote');
+    return true;
+  } catch (error) {
+    console.error(`Failed to demote participants in ${groupJid}:`, error);
+    return false;
+  }
+}
+
+// ==========================================
+// 4. PENDING JOIN REQUESTS (APPROVE/DECLINE)
+// ==========================================
+
+/**
+ * Approves or rejects pending group join requests universally or filtered by amount.
+ */
+export async function handlePendingRequests(
+  sock: WASocket,
+  groupJid: string,
+  action: 'approve' | 'reject',
+  amount?: number
+): Promise<{ success: boolean; processedCount: number }> {
+  try {
+    const pending = await sock.groupRequestParticipantsList(groupJid);
+    if (!pending || pending.length === 0) {
+      return { success: true, processedCount: 0 };
+    }
+
+    const targets = amount ? pending.slice(0, amount) : pending;
+    const targetJids = targets.map((p: any) => p.jid);
+
+    await sock.groupRequestParticipantsUpdate(groupJid, targetJids, action);
+    return { success: true, processedCount: targetJids.length };
+  } catch (error) {
+    console.error(`Failed to ${action} pending requests in ${groupJid}:`, error);
+    return { success: false, processedCount: 0 };
+  }
+}
+
+// ==========================================
+// 5. GROUP MUTE, PERMISSIONS & SETTINGS
+// ==========================================
+
+/**
+ * Mutes (announcement mode) or Unmutes the group.
+ */
+export async function setGroupMute(
+  sock: WASocket,
+  groupJid: string,
+  mute: boolean
+): Promise<boolean> {
+  try {
+    const mode = mute ? 'announcement' : 'not_announcement';
+    await sock.groupSettingUpdate(groupJid, mode);
+    return true;
+  } catch (error) {
+    console.error(`Failed to update mute state for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Locks or unlocks group settings modifications (Admins Only vs All Members).
+ */
+export async function setGroupSettingsLock(
+  sock: WASocket,
+  groupJid: string,
+  lockForAdminsOnly: boolean
+): Promise<boolean> {
+  try {
+    const mode = lockForAdminsOnly ? 'locked' : 'unlocked';
+    await sock.groupSettingUpdate(groupJid, mode);
+    return true;
+  } catch (error) {
+    console.error(`Failed to lock/unlock settings for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Toggles whether all participants are allowed to add members to the group.
+ */
+export async function setMemberAddPolicy(
+  sock: WASocket,
+  groupJid: string,
+  allowAllMembersToAdd: boolean
+): Promise<boolean> {
+  try {
+    const mode = allowAllMembersToAdd ? 'all_member_add' : 'admin_add';
+    await sock.groupMemberAddMode(groupJid, mode);
+    return true;
+  } catch (error) {
+    console.error(`Failed to update member add policy for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+// ==========================================
+// 6. DISAPPEARING MESSAGES & CHAT PRIVACY
+// ==========================================
+
+/**
+ * Updates Ephemeral / Disappearing message timers (Off, 24h, 7d, 90d).
+ * Values in seconds: 0 = Off, 86400 = 24h, 604800 = 7d, 7776000 = 90d.
+ */
+export async function setDisappearingMessages(
+  sock: WASocket,
+  groupJid: string,
+  seconds: 0 | 86400 | 604800 | 7776000
+): Promise<boolean> {
+  try {
+    await sock.groupToggleEphemeral(groupJid, seconds);
+    return true;
+  } catch (error) {
+    console.error(`Failed to set disappearing messages for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+// ==========================================
+// 7. GROUP SUBJECT, DESC, PFP & LINK MANAGEMENT
+// ==========================================
+
+/**
+ * Updates group title/subject.
+ */
+export async function updateGroupSubject(
+  sock: WASocket,
+  groupJid: string,
+  subject: string
+): Promise<boolean> {
+  try {
+    await sock.groupUpdateSubject(groupJid, subject);
+    return true;
+  } catch (error) {
+    console.error(`Failed to update group subject for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Updates group description.
+ */
+export async function updateGroupDescription(
+  sock: WASocket,
+  groupJid: string,
+  description: string
+): Promise<boolean> {
+  try {
+    await sock.groupUpdateDescription(groupJid, description);
+    return true;
+  } catch (error) {
+    console.error(`Failed to update group description for ${groupJid}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Updates group profile picture from an incoming image message buffer.
+ */
+export async function updateGroupPfp(
+  sock: WASocket,
+  groupJid: string,
+  msg: WAMessage
+): Promise<boolean> {
   try {
     const buffer = await downloadMediaMessage(msg, 'buffer', {});
-    await sock.updateProfilePicture(jid, buffer);
+    await sock.updateProfilePicture(groupJid, buffer);
     return true;
-  } catch (err) {
-    console.error('Failed to update group PFP:', err);
+  } catch (error) {
+    console.error(`Failed to update group PFP for ${groupJid}:`, error);
     return false;
   }
 }
 
-export async function deleteMessage(sock: WASocket, jid: string, msg: WAMessage): Promise<boolean> {
+/**
+ * Resets/revokes current invite link and generates a brand new link.
+ */
+export async function revokeAndGetGroupLink(
+  sock: WASocket,
+  groupJid: string
+): Promise<string | null> {
   try {
-    if (msg.key) {
-      await sock.sendMessage(jid, { delete: msg.key });
-      return true;
-    }
-    return false;
-  } catch (err) {
-    console.error('Failed to delete message:', err);
-    return false;
-  }
-}
-
-export async function setGroupMute(sock: WASocket, jid: string, mute: boolean): Promise<boolean> {
-  try {
-    // 'announcement' allows only admins to send messages (mutes the group for regular users)
-    // 'not_announcement' opens the chat for everyone
-    const setting = mute ? 'announcement' : 'not_announcement';
-    await sock.groupSettingUpdate(jid, setting);
-    return true;
-  } catch (err) {
-    console.error(`Failed to ${mute ? 'mute' : 'unmute'} group:`, err);
-    return false;
-  }
-}
-
-export async function revokeGroupLink(sock: WASocket, jid: string): Promise<string | null> {
-  try {
-    const newCode = await sock.groupRevokeInvite(jid);
-    return `https://chat.whatsapp.com/${newCode}`;
-  } catch (err) {
-    console.error('Failed to revoke group link:', err);
-    return null;
-  }
-}
-
-export async function getGroupInviteLink(sock: WASocket, jid: string): Promise<string | null> {
-  try {
-    const code = await sock.groupInviteCode(jid);
+    const code = await sock.groupRevokeInvite(groupJid);
     return `https://chat.whatsapp.com/${code}`;
-  } catch (err) {
-    console.error('Failed to fetch group invite code:', err);
+  } catch (error) {
+    console.error(`Failed to revoke group link for ${groupJid}:`, error);
     return null;
   }
 }
 
-export async function executeTagAll(sock: WASocket, jid: string, customMessage?: string): Promise<void> {
-  try {
-    const metadata = await sock.groupMetadata(jid);
-    const participants = metadata.participants.map((p) => p.id);
+// ==========================================
+// 8. BROADCASTING: TAGALL & HIDETAG
+// ==========================================
 
-    let text = customMessage ? `📢 *ANNOUNCEMENT*\n${customMessage}\n\n` : `📢 *EVERYONE*\n\n`;
-    for (const p of participants) {
-      text += `@${p.split('@')[0]}\n`;
+/**
+ * Universal tagall or hidetag execution.
+ * Mentions all participants while preserving message format.
+ */
+export async function executeGroupTag(
+  sock: WASocket,
+  groupJid: string,
+  messageText: string,
+  hideMentions: boolean = false,
+  quotedMsg?: WAMessage
+): Promise<boolean> {
+  try {
+    const metadata = await sock.groupMetadata(groupJid);
+    const mentions = metadata.participants.map((p) => p.id);
+
+    if (hideMentions) {
+      // Hidetag: sends text naturally without listing visible @mentions
+      await sock.sendMessage(
+        groupJid,
+        { text: messageText, mentions: mentions },
+        { quoted: quotedMsg }
+      );
+    } else {
+      // Visible TagAll: builds explicit list of mentions
+      let tagText = `${messageText}\n\n`;
+      for (const jid of mentions) {
+        tagText += `@${jid.split('@')[0]} `;
+      }
+      await sock.sendMessage(
+        groupJid,
+        { text: tagText.trim(), mentions: mentions },
+        { quoted: quotedMsg }
+      );
     }
-
-    await sock.sendMessage(jid, { text, mentions: participants });
-  } catch (err) {
-    console.error('Failed to execute tagall:', err);
-  }
-}
-
-export async function executeHideTag(sock: WASocket, jid: string, announcementText: string): Promise<void> {
-  try {
-    const metadata = await sock.groupMetadata(jid);
-    const participants = metadata.participants.map((p) => p.id);
-
-    await sock.sendMessage(jid, { text: announcementText, mentions: participants });
-  } catch (err) {
-    console.error('Failed to execute hidetag:', err);
-  }
-}
-
-export async function promoteUsers(sock: WASocket, jid: string, targets: string[]): Promise<boolean> {
-  try {
-    await sock.groupParticipantsUpdate(jid, targets, 'promote');
     return true;
-  } catch (err) {
-    console.error('Failed to promote user(s):', err);
+  } catch (error) {
+    console.error(`Failed to execute group tag in ${groupJid}:`, error);
     return false;
   }
 }
 
-export async function demoteUsers(sock: WASocket, jid: string, targets: string[]): Promise<boolean> {
-  try {
-    await sock.groupParticipantsUpdate(jid, targets, 'demote');
-    return true;
-  } catch (err) {
-    console.error('Failed to demote user(s):', err);
-    return false;
-  }
-}
+// ==========================================
+// 9. POLL CREATION & UTILITY
+// ==========================================
 
-export async function handleJoinRequests(sock: WASocket, jid: string, action: 'approve' | 'reject'): Promise<string> {
-  try {
-    const pendingList = await sock.groupRequestParticipantsList(jid);
-    
-    if (!pendingList || pendingList.length === 0) {
-      return 'No pending join requests found (or queue is not synced).';
-    }
-
-    const userJids = pendingList.map((p) => p.jid);
-    await sock.groupRequestParticipantsUpdate(jid, userJids, action);
-    return `Successfully ${action === 'approve' ? 'approved' : 'rejected'} ${userJids.length} pending request(s).`;
-  } catch (err) {
-    console.error(`Failed to ${action} join requests:`, err);
-    return `Failed to ${action} join requests. Ensure I am an admin with membership approval rights.`;
-  }
-  }
-
-// --- NEW ADMIN CAPABILITIES ---
-
+/**
+ * Creates a native WhatsApp poll in the group.
+ */
 export async function createGroupPoll(
   sock: WASocket,
-  jid: string,
+  groupJid: string,
   title: string,
   options: string[],
   selectableCount: number = 1
 ): Promise<boolean> {
   try {
-    await sock.sendMessage(jid, {
+    await sock.sendMessage(groupJid, {
       poll: {
         name: title,
         values: options,
-        selectableCount
+        selectableCount: selectableCount
       }
     });
     return true;
-  } catch (err) {
-    console.error('Failed to create poll:', err);
+  } catch (error) {
+    console.error(`Failed to create poll in ${groupJid}:`, error);
     return false;
   }
 }
 
-export async function setDisappearingMessages(
+// ==========================================
+// 10. CALL SIGNALING & TIMED CALLS
+// ==========================================
+
+/**
+ * Triggers group call offer signaling.
+ * Handles auto-ending timed calls using native timeout schedules.
+ */
+export async function manageGroupCall(
   sock: WASocket,
-  jid: string,
-  ephemeralExpiration: number // Seconds: 0 (Off), 86400 (24h), 604800 (7d), 7776000 (90d)
+  groupJid: string,
+  durationMinutes?: number
 ): Promise<boolean> {
   try {
-    await sock.sendMessage(jid, {
-      disappearingMessagesInChat: ephemeralExpiration
-    });
-    return true;
-  } catch (err) {
-    console.error('Failed to set disappearing messages:', err);
-    return false;
-  }
-}
-
-export async function setGroupEditSetting(
-  sock: WASocket,
-  jid: string,
-  restrictToAdmins: boolean
-): Promise<boolean> {
-  try {
-    // 'locked' = only admins can edit group info; 'unlocked' = all members can edit
-    const setting = restrictToAdmins ? 'locked' : 'unlocked';
-    await sock.groupSettingUpdate(jid, setting);
-    return true;
-  } catch (err) {
-    console.error('Failed to update group edit settings:', err);
-    return false;
-  }
-}
-
-export async function removeGroupUsers(
-  sock: WASocket,
-  jid: string,
-  targets: string[]
-): Promise<boolean> {
-  try {
-    await sock.groupParticipantsUpdate(jid, targets, 'remove');
-    return true;
-  } catch (err) {
-    console.error('Failed to remove users:', err);
-    return false;
-  }
-}
-
-export async function getMembersByCountryCode(
-  sock: WASocket,
-  jid: string,
-  countryPrefix: string
-): Promise<string[]> {
-  try {
-    const metadata = await sock.groupMetadata(jid);
-    const cleanPrefix = countryPrefix.replace('+', '').trim();
-    
-    // Filter participants whose phone numbers start with the clean country code
-    const matched = metadata.participants.filter((p) => {
-      const numberPart = p.id.split('@')[0];
-      return numberPart.startsWith(cleanPrefix);
+    // Generate call node offer
+    const callId = `call_${Date.now()}`;
+    await sock.query({
+      tag: 'call',
+      attrs: {
+        to: groupJid,
+        id: callId
+      },
+      content: [
+        {
+          tag: 'offer',
+          attrs: {
+            'call-creator': sock.user?.id || '',
+            'call-id': callId
+          },
+          content: []
+        }
+      ]
     });
 
-    return matched.map((p) => p.id);
-  } catch (err) {
-    console.error('Failed to fetch members by country code:', err);
-    return [];
+    // Schedule auto-termination if duration parameter was passed
+    if (durationMinutes && durationMinutes > 0) {
+      setTimeout(async () => {
+        try {
+          await sock.query({
+            tag: 'call',
+            attrs: {
+              to: groupJid,
+              id: callId
+            },
+            content: [
+              {
+                tag: 'terminate',
+                attrs: {
+                  'call-id': callId,
+                  reason: 'hangup'
+                },
+                content: []
+              }
+            ]
+          });
+          console.log(`Timed call automatically ended after ${durationMinutes} minute(s).`);
+        } catch (err) {
+          console.error('Failed to terminate timed group call:', err);
+        }
+      }, durationMinutes * 60 * 1000);
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`Failed to manage group call in ${groupJid}:`, error);
+    return false;
   }
 }
+
+// ==========================================
+// 11. MESSAGE DELETION
+// ==========================================
+
+/**
+ * Deletes any targeted message from the group.
+ */
+export async function deleteGroupMessage(
+  sock: WASocket,
+  groupJid: string,
+  msg: WAMessage
+): Promise<boolean> {
+  try {
+    await sock.sendMessage(groupJid, { delete: msg.key });
+    return true;
+  } catch (error) {
+    console.error(`Failed to delete message in ${groupJid}:`, error);
+    return false;
+  }
+    }
