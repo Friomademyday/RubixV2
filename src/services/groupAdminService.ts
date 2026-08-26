@@ -136,7 +136,7 @@ export async function getUniversalGroupData(
     pendingRequestsCount: pendingList.length,
     pendingParticipants: pendingList
   };
-}
+    }
 
 // Helper utility to parse country phone prefix
 function extractCountryPrefix(phoneNumber: string): string {
