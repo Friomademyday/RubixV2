@@ -137,60 +137,129 @@ const taskDecompositionSchema = {
 
 /**
  * Parses raw prompts into ordered atomic polynomial tasks (nX^n + ... + nX^0).
+ * Performs local deterministic parsing to avoid network overhead and 503 limits.
  */
 export async function decomposePromptToPolynomial(
   ai: GoogleGenAI,
   promptText: string
 ): Promise<PolynomialDecompositionResult> {
-  const decompositionSystemInstruction = `
-    You are Rubix's Arithmetic Logic (AL) Engine.
-    Your task is to take any raw input prompt and decompose it into an ordered sequence of atomic operational tasks.
-    
-    Calculate the polynomial degree n (total tasks).
-    Express tasks in descending order of execution: Task nX^n down to Task nX^0.
-    
-    Task Type Mapping Rules:
-    - Questions about today's date -> GET_DATE
-    - Questions asking for members from specific countries/prefixes (e.g. Nigerians -> prefix "234", Pakistanis -> prefix "92") -> FETCH_COUNTRY_COUNT
-    - Checking join requests -> CHECK_PENDING_REQUESTS
-    - Approving requests -> ACCEPT_PENDING_REQUESTS
-    - Declining requests -> REJECT_PENDING_REQUESTS
-    - Setting/changing description -> CHANGE_DESCRIPTION
-    - Anti-link state changes -> TOGGLE_ANTILINK
-    - Muting or locking group -> MUTE_GROUP / UNMUTE_GROUP
-    - General questions or conversational chatting -> GENERAL_QUERY
-  `;
+  const lower = promptText.toLowerCase();
+  const tasks: AtomicTask[] = [];
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash-lite',
-      contents: [promptText],
-      config: {
-        systemInstruction: decompositionSystemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema: taskDecompositionSchema,
-        temperature: 0.1 // Low temperature for consistent execution pipelines
-      }
-    });
-
-    const rawJson = response.text || '{}';
-    return JSON.parse(rawJson) as PolynomialDecompositionResult;
-  } catch (err) {
-    console.error('Failed to decompose prompt with AL engine:', err);
-    // Fallback polynomial degree 1 (nX^0)
-    return {
-      totalTasks: 1,
-      polynomialDegreeNotation: 'nX^0',
-      tasks: [
-        {
-          degree: 0,
-          taskType: 'GENERAL_QUERY',
-          parameters: { value: promptText },
-          requiresAdminPermission: false
-        }
-      ]
-    };
+  if (lower.includes('date') || lower.includes('today')) {
+    tasks.push({ degree: 0, taskType: 'GET_DATE', requiresAdminPermission: false });
   }
+
+  if (lower.includes('nigerian') || lower.includes('+234') || lower.includes('nigerians')) {
+    tasks.push({
+      degree: 0,
+      taskType: 'FETCH_COUNTRY_COUNT',
+      parameters: { countryPrefix: '234' },
+      requiresAdminPermission: false
+    });
+  }
+
+  if (lower.includes('pakistan') || lower.includes('+92') || lower.includes('pakistanis')) {
+    tasks.push({
+      degree: 0,
+      taskType: 'FETCH_COUNTRY_COUNT',
+      parameters: { countryPrefix: '92' },
+      requiresAdminPermission: false
+    });
+  }
+
+  if (lower.includes('pending') || lower.includes('request')) {
+    if (lower.includes('accept') || lower.includes('approve')) {
+      const match = lower.match(/\d+/);
+      const amt = match ? parseInt(match[0]) : undefined;
+      tasks.push({
+        degree: 0,
+        taskType: 'ACCEPT_PENDING_REQUESTS',
+        parameters: { amount: amt },
+        requiresAdminPermission: true
+      });
+    } else if (lower.includes('decline') || lower.includes('reject')) {
+      const match = lower.match(/\d+/);
+      const amt = match ? parseInt(match[0]) : undefined;
+      tasks.push({
+        degree: 0,
+        taskType: 'REJECT_PENDING_REQUESTS',
+        parameters: { amount: amt },
+        requiresAdminPermission: true
+      });
+    } else {
+      tasks.push({ degree: 0, taskType: 'CHECK_PENDING_REQUESTS', requiresAdminPermission: true });
+    }
+  }
+
+  if (lower.includes('description') || lower.includes('desc')) {
+    const descMatch = promptText.match(/(?:to|as)\s+([^,.]+)/i);
+    tasks.push({
+      degree: 0,
+      taskType: 'CHANGE_DESCRIPTION',
+      parameters: { value: descMatch ? descMatch[1].trim() : 'Updated group description.' },
+      requiresAdminPermission: true
+    });
+  }
+
+  if (lower.includes('subject') || lower.includes('group name') || lower.includes('rename')) {
+    const nameMatch = promptText.match(/(?:to|as)\s+([^,.]+)/i);
+    tasks.push({
+      degree: 0,
+      taskType: 'CHANGE_SUBJECT',
+      parameters: { value: nameMatch ? nameMatch[1].trim() : 'Rubix Group' },
+      requiresAdminPermission: true
+    });
+  }
+
+  if (lower.includes('antilink')) {
+    const state = lower.includes('off') || lower.includes('disable') ? 0 : 1;
+    tasks.push({
+      degree: 0,
+      taskType: 'TOGGLE_ANTILINK',
+      parameters: { state },
+      requiresAdminPermission: true
+    });
+  }
+
+  if (lower.includes('mute') && !lower.includes('unmute')) {
+    tasks.push({ degree: 0, taskType: 'MUTE_GROUP', requiresAdminPermission: true });
+  }
+
+  if (lower.includes('unmute')) {
+    tasks.push({ degree: 0, taskType: 'UNMUTE_GROUP', requiresAdminPermission: true });
+  }
+
+  if (lower.includes('revoke') || lower.includes('reset link')) {
+    tasks.push({ degree: 0, taskType: 'REVOKE_LINK', requiresAdminPermission: true });
+  }
+
+  if (lower.includes('info') || lower.includes('members') || lower.includes('details')) {
+    tasks.push({ degree: 0, taskType: 'FETCH_GROUP_INFO', requiresAdminPermission: false });
+  }
+
+  if (tasks.length === 0) {
+    tasks.push({
+      degree: 0,
+      taskType: 'GENERAL_QUERY',
+      parameters: { value: promptText },
+      requiresAdminPermission: false
+    });
+  }
+
+  const reversedTasks = tasks.reverse().map((t, index) => ({
+    ...t,
+    degree: tasks.length - 1 - index
+  }));
+
+  const total = reversedTasks.length;
+  const notation = reversedTasks.map((t) => `${total}X^${t.degree}`).join(' + ');
+
+  return {
+    totalTasks: total,
+    polynomialDegreeNotation: notation,
+    tasks: reversedTasks
+  };
 }
 
 // ==========================================
@@ -354,4 +423,4 @@ export async function executePolynomialTasks(
   }
 
   return executionResults;
-}
+  }
