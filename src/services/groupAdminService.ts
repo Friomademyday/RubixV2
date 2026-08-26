@@ -77,13 +77,13 @@ export async function isBotAdmin(sock: WASocket, groupJid: string): Promise<bool
 /**
  * Retrieves full universal metadata, member stats, pending requests, and invite codes.
  */
+
 export async function getUniversalGroupData(
   sock: WASocket,
   groupJid: string
 ): Promise<UniversalGroupData> {
   const metadata: GroupMetadata = await sock.groupMetadata(groupJid);
 
-  // Extract country prefixes from JIDs
   const processedParticipants = metadata.participants.map((p) => {
     const cleanNumber = p.id.split('@')[0];
     return {
@@ -93,7 +93,6 @@ export async function getUniversalGroupData(
     };
   });
 
-  // Attempt to fetch pending join requests if supported by WhatsApp group state
   let pendingList: any[] = [];
   try {
     const pendingRequests = await sock.groupRequestParticipantsList(groupJid);
@@ -106,11 +105,9 @@ export async function getUniversalGroupData(
       };
     });
   } catch (err) {
-    // If bot isn't admin or group doesn't have join approval active
     pendingList = [];
   }
 
-  // Attempt to fetch invite code
   let code: string | undefined = undefined;
   try {
     code = await sock.groupInviteCode(groupJid);
@@ -131,10 +128,10 @@ export async function getUniversalGroupData(
     descTime: metadata.descTime,
     restrict: !!metadata.restrict,
     announce: !!metadata.announce,
-    memberAddMode: metadata.memberAddMode === 'all_member_add',
+    memberAddMode: (metadata as any).memberAddMode === 'all_member_add' || (metadata as any).memberAddMode === true,
     size: metadata.size || metadata.participants.length,
     participants: processedParticipants,
-    ephemeralDuration: metadata.ephemeralDuration,
+    ephemeralDuration: metadata.ephemeralDuration ?? 0,
     inviteCode: code ? `https://chat.whatsapp.com/${code}` : undefined,
     pendingRequestsCount: pendingList.length,
     pendingParticipants: pendingList
