@@ -2,11 +2,31 @@ import { WASocket, WAMessage, isJidGroup, jidNormalizedUser, downloadMediaMessag
 import { GoogleGenAI } from '@google/genai';
 import { loadPersona } from '../utils/persona.js';
 import { getGroupState } from '../config/groupState.js';
-import { deleteGroupMessage } from '../services/groupAdminService.js';
-import { decomposePromptToPolynomial, executePolynomialTasks } from '../engine/arithmeticEngine.js';
+import { getChatContext, formatContextForAI } from '../services/groupContextService.js';
+import { deleteMessage } from '../services/groupAdminService.js';
+import { processAdminCommands } from './adminHandler.js';
 
 const personaText = loadPersona();
+
 const WHATSAPP_LINK_REGEX = /(chat\.whatsapp\.com\/[A-Za-z0-9]{20,26}|whatsapp\.com\/channel\/[A-Za-z0-9]{20,26})/i;
+const STATUS_SHARE_REGEX = /(whatsapp\.com\/status\/|status@broadcast)/i;
+
+/**
+ * Removes all markdown formatting symbols (*, _, ~, `, #, -, +, etc.)
+ * leaving clean plain text.
+ */
+function cleanPlainText(text: string): string {
+  return text
+    // Remove bold/italic asterisks, underscores, tildes, and backticks
+    .replace(/[*_~`]/g, '')
+    // Remove bullet point markers at the start of lines (- , + , * )
+    .replace(/^[\s]*[-+*]\s+/gm, '')
+    // Remove header symbols (# Heading -> Heading)
+    .replace(/^[\s]*#+\s+/gm, '')
+    // Clean up multiple empty line breaks
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 export async function handleGroupMessage(
   sock: WASocket,
@@ -27,19 +47,21 @@ export async function handleGroupMessage(
     msg.message.videoMessage?.caption ||
     '';
 
+  // Passive Anti-Link & Anti-Status check
   if (isGroup) {
     const groupState = getGroupState(jid);
-    if (groupState.antiLink === 1 && WHATSAPP_LINK_REGEX.test(text)) {
-      await deleteGroupMessage(sock, jid, msg);
-      return;
+    if (groupState.antiLink === 1) {
+      if (WHATSAPP_LINK_REGEX.test(text) || STATUS_SHARE_REGEX.test(text)) {
+        await deleteMessage(sock, jid, msg);
+        return;
+      }
     }
   }
 
   const rawBotId = sock.user?.id || '';
   const botJid = jidNormalizedUser(rawBotId);
-  const senderJid = jidNormalizedUser(msg.key.participant || msg.key.remoteJid || '');
-
   const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+
   const mentionedJids = (contextInfo?.mentionedJid || []).map((id) => jidNormalizedUser(id));
   const quotedParticipant = contextInfo?.participant ? jidNormalizedUser(contextInfo.participant) : '';
 
@@ -51,6 +73,23 @@ export async function handleGroupMessage(
 
   const promptText = text.replace(/@\d+/g, '').replace(/rubix/gi, '').trim();
 
+  // Fetch Group & User Context
+  const contextData = await getChatContext(sock, msg);
+
+  // Pass to admin command router first
+  if (isGroup) {
+    const wasAdminCommandHandled = await processAdminCommands(
+      sock,
+      jid,
+      msg,
+      promptText,
+      contextData,
+      botJid
+    );
+    if (wasAdminCommandHandled) return;
+  }
+
+  // Gemini Fallback Processing
   let placeholderMsg;
   try {
     placeholderMsg = await sock.sendMessage(
@@ -77,35 +116,53 @@ export async function handleGroupMessage(
       });
     }
 
-    const finalPrompt = promptText || (imageMsg ? 'Analyze this image.' : 'Hello!');
-    
-    const polynomialPipeline = await decomposePromptToPolynomial(ai, finalPrompt);
+    let quotedMessageText = '';
+    if (contextInfo?.quotedMessage) {
+      quotedMessageText =
+        contextInfo.quotedMessage.conversation ||
+        contextInfo.quotedMessage.extendedTextMessage?.text ||
+        contextInfo.quotedMessage.imageMessage?.caption ||
+        contextInfo.quotedMessage.videoMessage?.caption ||
+        '';
+    }
 
-    const taskExecutionLogs = await executePolynomialTasks(
-      sock,
-      jid,
-      senderJid,
-      msg,
-      polynomialPipeline
-    );
+    const environmentBlock = formatContextForAI(contextData);
 
-    contents.push(
-      `User Prompt: "${finalPrompt}"\n\n` +
-      `Polynomial Sequence: ${polynomialPipeline.polynomialDegreeNotation}\n` +
-      `Backend Execution Logs:\n${taskExecutionLogs.join('\n')}\n\n` +
-      `Synthesize a complete response to the user reflecting the results above while adhering strictly to your persona.`
-    );
+    const fullSystemInstruction = `${personaText}
+
+CRITICAL FORMATTING INSTRUCTIONS:
+- You must output PLAIN TEXT ONLY.
+- DO NOT use any markdown characters: no asterisks (*), no underscores (_), no tildes (~), no backticks (\`), no hash tags (#), no hyphens (-), and no plus signs (+) for lists.
+- For list structures or clear formatting, use numbered lists (1., 2., 3.) or plain line breaks only.
+- Never wrap words in formatting symbols.
+
+=== ENVIRONMENT DATA ===
+${environmentBlock}
+
+Answer the active user using your persona while maintaining awareness of the chat environment context.`;
+
+    let finalPrompt = promptText || (imageMsg ? 'Describe what is in this image.' : 'Hello!');
+
+    if (quotedMessageText) {
+      finalPrompt = `[HIGHLIGHTED/QUOTED MESSAGE BEING REPLIED TO]: "${quotedMessageText}"\n\n[USER QUESTION/COMMAND]: ${finalPrompt}`;
+    }
+
+    contents.push(finalPrompt);
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash-lite',
-      contents: contents,
+      contents,
       config: {
-        systemInstruction: personaText,
-        temperature: 0.7
+        systemInstruction: fullSystemInstruction,
+        temperature: 0.7,
+        maxOutputTokens: 300
       }
     });
 
-    const replyText = response.text || 'Action pipeline executed successfully.';
+    const rawReply = response.text || 'Process completed with no output.';
+    
+    // Clean all special symbols from the output before sending to WhatsApp
+    const replyText = cleanPlainText(rawReply);
 
     if (placeholderMsg && placeholderMsg.key) {
       await sock.sendMessage(jid, {
@@ -114,12 +171,12 @@ export async function handleGroupMessage(
       });
     }
   } catch (error) {
-    console.error('Error executing message handling pipeline:', error);
+    console.error('Error generating content from Gemini:', error);
     if (placeholderMsg && placeholderMsg.key) {
       await sock.sendMessage(jid, {
-        text: 'Core system disruption. Failed to execute task pipeline.',
+        text: 'System core error. Try again.',
         edit: placeholderMsg.key
       });
     }
   }
-                                       }
+    }
