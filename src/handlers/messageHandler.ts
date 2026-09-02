@@ -7,6 +7,8 @@ import { deleteMessage } from '../services/groupAdminService.js';
 import { processAdminCommands } from './adminHandler.js';
 import { processMediaCommands } from './mediaHandler.js';
 import { processUtilityCommands } from './utilityHandler.js';
+import { processSearchCommands } from './searchHandler.js';
+import { processVoiceCommands } from './voiceHandler.js';
 import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory.js';
 
 const personaText = loadPersona();
@@ -114,6 +116,27 @@ export async function handleGroupMessage(
       ai
     );
     if (wasUtilityHandled) return;
+
+    // 4. Intelligent Live Search Capabilities
+    const wasSearchHandled = await processSearchCommands(
+      sock,
+      jid,
+      msg,
+      promptText,
+      contextData,
+      ai
+    );
+    if (wasSearchHandled) return;
+
+    // 5. Natural Voice Note Synthesis
+    const wasVoiceHandled = await processVoiceCommands(
+      sock,
+      jid,
+      msg,
+      promptText,
+      ai
+    );
+    if (wasVoiceHandled) return;
   }
 
   // Gemini Fallback Processing
@@ -210,4 +233,4 @@ Answer the active user using your persona while maintaining awareness of the cha
       });
     }
   }
-      }
+}
