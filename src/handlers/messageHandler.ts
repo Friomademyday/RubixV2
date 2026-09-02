@@ -5,6 +5,9 @@ import { getGroupState } from '../config/groupState.js';
 import { getChatContext, formatContextForAI } from '../services/groupContextService.js';
 import { deleteMessage } from '../services/groupAdminService.js';
 import { processAdminCommands } from './adminHandler.js';
+import { processMediaCommands } from './mediaHandler.js';
+import { processUtilityCommands } from './utilityHandler.js';
+import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory.js';
 
 const personaText = loadPersona();
 
@@ -47,7 +50,10 @@ export async function handleGroupMessage(
     msg.message.videoMessage?.caption ||
     '';
 
-  // Passive Anti-Link & Anti-Status check
+  // Fetch Group & User Context early so we have the sender's pushName
+  const contextData = await getChatContext(sock, msg);
+
+  // Passive Anti-Link, Anti-Status, and Chat Memory recording
   if (isGroup) {
     const groupState = getGroupState(jid);
     if (groupState.antiLink === 1) {
@@ -56,6 +62,9 @@ export async function handleGroupMessage(
         return;
       }
     }
+
+    // Record every incoming group message into RAM buffer (0ms latency)
+    recordGroupMessage(jid, msg, contextData.senderName);
   }
 
   const rawBotId = sock.user?.id || '';
@@ -73,12 +82,10 @@ export async function handleGroupMessage(
 
   const promptText = text.replace(/@\d+/g, '').replace(/rubix/gi, '').trim();
 
-  // Fetch Group & User Context
-  const contextData = await getChatContext(sock, msg);
-
-  // Pass to admin command router first
+  // Route commands through domain handlers before triggering Gemini AI
   if (isGroup) {
-    const wasAdminCommandHandled = await processAdminCommands(
+    // 1. Admin Actions (Mute, Kick, Polls, Anti-link settings)
+    const wasAdminHandled = await processAdminCommands(
       sock,
       jid,
       msg,
@@ -86,7 +93,27 @@ export async function handleGroupMessage(
       contextData,
       botJid
     );
-    if (wasAdminCommandHandled) return;
+    if (wasAdminHandled) return;
+
+    // 2. Natural Media Requests (Stickers, Audio conversions)
+    const wasMediaHandled = await processMediaCommands(
+      sock,
+      jid,
+      msg,
+      promptText
+    );
+    if (wasMediaHandled) return;
+
+    // 3. Utilities & Analytics (Chat summaries, Ghost members, Identity)
+    const wasUtilityHandled = await processUtilityCommands(
+      sock,
+      jid,
+      msg,
+      promptText,
+      contextData,
+      ai
+    );
+    if (wasUtilityHandled) return;
   }
 
   // Gemini Fallback Processing
@@ -127,6 +154,7 @@ export async function handleGroupMessage(
     }
 
     const environmentBlock = formatContextForAI(contextData);
+    const memoryBlock = isGroup ? getFormattedGroupMemory(jid) : 'N/A';
 
     const fullSystemInstruction = `${personaText}
 
@@ -139,7 +167,10 @@ CRITICAL FORMATTING INSTRUCTIONS:
 === ENVIRONMENT DATA ===
 ${environmentBlock}
 
-Answer the active user using your persona while maintaining awareness of the chat environment context.`;
+=== RECENT CHAT MEMORY ===
+${memoryBlock}
+
+Answer the active user using your persona while maintaining awareness of the chat environment context and chat history.`;
 
     let finalPrompt = promptText || (imageMsg ? 'Describe what is in this image.' : 'Hello!');
 
@@ -160,7 +191,7 @@ Answer the active user using your persona while maintaining awareness of the cha
     });
 
     const rawReply = response.text || 'Process completed with no output.';
-    
+
     // Clean all special symbols from the output before sending to WhatsApp
     const replyText = cleanPlainText(rawReply);
 
@@ -179,4 +210,4 @@ Answer the active user using your persona while maintaining awareness of the cha
       });
     }
   }
-    }
+      }
