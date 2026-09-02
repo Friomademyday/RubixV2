@@ -10,6 +10,8 @@ import { processUtilityCommands } from './utilityHandler.js';
 import { processSearchCommands } from './searchHandler.js';
 import { processVoiceCommands } from './voiceHandler.js';
 import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory.js';
+import { fastMatchIntents } from '../agent/intentMatrix.js';
+import { executePolynomialTasks } from '../agent/executor.js';
 
 const personaText = loadPersona();
 
@@ -139,7 +141,16 @@ export async function handleGroupMessage(
     if (wasVoiceHandled) return;
   }
 
-  // Gemini Fallback Processing
+  // Decompose complex multi-task prompts through the Intent Matrix
+  const senderJid = msg.key.participant || msg.key.remoteJid || '';
+  let taskExecutionLogs: string[] = [];
+
+  if (isGroup) {
+    const pipeline = fastMatchIntents(promptText);
+    taskExecutionLogs = await executePolynomialTasks(sock, jid, senderJid, msg, pipeline);
+  }
+
+  // Gemini Fallback & Comprehensive Task Response Processing
   let placeholderMsg;
   try {
     placeholderMsg = await sock.sendMessage(
@@ -178,6 +189,7 @@ export async function handleGroupMessage(
 
     const environmentBlock = formatContextForAI(contextData);
     const memoryBlock = isGroup ? getFormattedGroupMemory(jid) : 'N/A';
+    const taskLogBlock = taskExecutionLogs.length > 0 ? taskExecutionLogs.join('\n') : 'No polynomial actions required.';
 
     const fullSystemInstruction = `${personaText}
 
@@ -190,10 +202,13 @@ CRITICAL FORMATTING INSTRUCTIONS:
 === ENVIRONMENT DATA ===
 ${environmentBlock}
 
+=== EXECUTED SYSTEM ACTIONS ===
+${taskLogBlock}
+
 === RECENT CHAT MEMORY ===
 ${memoryBlock}
 
-Answer the active user using your persona while maintaining awareness of the chat environment context and chat history.`;
+Answer the active user using your persona while maintaining awareness of the chat environment context, chat history, and any system actions executed above.`;
 
     let finalPrompt = promptText || (imageMsg ? 'Describe what is in this image.' : 'Hello!');
 
@@ -233,4 +248,4 @@ Answer the active user using your persona while maintaining awareness of the cha
       });
     }
   }
-}
+          }
