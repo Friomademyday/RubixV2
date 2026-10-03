@@ -52,13 +52,11 @@ export async function processMediaCommands(
 
     try {
       const mediaBuffer = await downloadMediaMessage(targetMsg, 'buffer', {});
-
       await sock.sendMessage(
         jid,
         {
           sticker: mediaBuffer,
-          packname: STICKER_PACK_NAME,
-          author: STICKER_AUTHOR
+          ...({ packname: STICKER_PACK_NAME, author: STICKER_AUTHOR } as any)
         },
         { quoted: msg }
       );
