@@ -554,3 +554,36 @@ export async function deleteGroupMessage(
     return false;
   }
     }
+
+  // Aliases and missing functions expected by handlers:
+export const revokeGroupLink = revokeAndGetGroupLink;
+
+export async function getGroupInviteLink(sock: WASocket, groupJid: string): Promise<string | null> {
+  const data = await getUniversalGroupData(sock, groupJid);
+  return data.inviteCode || null;
+}
+
+export async function executeTagAll(sock: WASocket, groupJid: string, messageText: string, quotedMsg?: WAMessage): Promise<boolean> {
+  return executeGroupTag(sock, groupJid, messageText, false, quotedMsg);
+}
+
+export async function executeHideTag(sock: WASocket, groupJid: string, messageText: string, quotedMsg?: WAMessage): Promise<boolean> {
+  return executeGroupTag(sock, groupJid, messageText, true, quotedMsg);
+}
+
+export const promoteUsers = promoteParticipants;
+export const demoteUsers = demoteParticipants;
+export const removeGroupUsers = kickParticipants;
+
+export async function setGroupEditSetting(sock: WASocket, groupJid: string, lock: boolean): Promise<boolean> {
+  return setGroupSettingsLock(sock, groupJid, lock);
+}
+
+export async function getMembersByCountryCode(sock: WASocket, groupJid: string, countryCode: string): Promise<string[]> {
+  const data = await getUniversalGroupData(sock, groupJid);
+  return data.participants
+    .filter((p) => p.countryPrefix === countryCode)
+    .map((p) => p.id);
+}
+
+export const deleteMessage = deleteGroupMessage;
