@@ -1,6 +1,7 @@
 import { WASocket, WAMessage } from '@whiskeysockets/baileys';
 import { GoogleGenAI } from '@google/genai';
-import { GroupChatContext } from '../services/groupContextService.js';
+import { getChatContext } from '../services/groupContextService.js';
+type GroupChatContext = Awaited<ReturnType<typeof getChatContext>>;
 
 export async function processSearchCommands(
   sock: WASocket,
