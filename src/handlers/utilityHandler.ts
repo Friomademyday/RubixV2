@@ -1,7 +1,8 @@
 import { WASocket, WAMessage, jidNormalizedUser } from '@whiskeysockets/baileys';
 import { GoogleGenAI } from '@google/genai';
-import { getFormattedGroupMemory, getRawGroupMemory } from '../agent/chatMemory.ts';
-import { GroupChatContext } from '../services/groupContextService.js';
+import { getFormattedGroupMemory, getRawGroupMemory } from '../agent/chatMemory.js';
+import { getChatContext } from '../services/groupContextService.js';
+type GroupChatContext = Awaited<ReturnType<typeof getChatContext>>;
 
 export async function processUtilityCommands(
   sock: WASocket,
