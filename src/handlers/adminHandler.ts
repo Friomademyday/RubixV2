@@ -18,7 +18,8 @@ import {
   removeGroupUsers,
   getMembersByCountryCode
 } from '../services/groupAdminService.js';
-import { GroupChatContext } from '../services/groupContextService.js';
+import { getChatContext } from '../services/groupContextService.js';
+type GroupChatContext = Awaited<ReturnType<typeof getChatContext>>;
 
 const COUNTRY_CODES: Record<string, string> = {
   nigeria: '234', nigerian: '234', nigerians: '234',
@@ -105,7 +106,7 @@ export async function processAdminCommands(
     else if (lowerPrompt.includes('90') || lowerPrompt.includes('90 days')) seconds = 7776000;
     else if (lowerPrompt.includes('off') || lowerPrompt.includes('disable')) seconds = 0;
 
-    const success = await setDisappearingMessages(sock, jid, seconds);
+    const success = await setDisappearingMessages(sock, jid, seconds as 0 | 86400 | 604800 | 7776000);
     await sock.sendMessage(
       jid,
       { text: success ? 'Disappearing messages timer updated.' : 'Failed to set disappearing messages.' },
