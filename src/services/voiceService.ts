@@ -1,4 +1,5 @@
 import { WASocket, WAMessage } from '@whiskeysockets/baileys';
+// @ts-ignore
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'edge-tts';
 
 // UK English Female Neural Voices:
