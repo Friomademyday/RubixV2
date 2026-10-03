@@ -1,6 +1,10 @@
+declare module 'ws';
+
 import * as fs from 'fs';
+import * as path from 'path';
 import * as crypto from 'crypto';
 import WebSocket from 'ws';
+import { WASocket, WAMessage } from '@whiskeysockets/baileys';
 
 export const OUTPUT_FORMAT = {
   AUDIO_24KHZ_96KBITRATE_MONO_MP3: 'audio-24khz-96kbitrate-mono-mp3'
@@ -59,10 +63,38 @@ export class MsEdgeTTS {
         resolve();
       });
 
-      ws.on('error', (error) => {
+      ws.on('error', (error: any) => {
         fileStream.destroy();
         reject(error);
       });
     });
   }
 }
+
+export async function sendNaturalVoiceNote(
+  sock: WASocket,
+  jid: string,
+  text: string,
+  quotedMsg?: WAMessage
+): Promise<void> {
+  const tts = new MsEdgeTTS();
+  await tts.setMetadata('en-US-AriaNeural', OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+  const tempFilePath = path.join('/tmp', `tts_${Date.now()}.mp3`);
+  
+  try {
+    await tts.toFile(tempFilePath, text);
+    await sock.sendMessage(
+      jid,
+      {
+        audio: { url: tempFilePath },
+        mimetype: 'audio/mp4',
+        ptt: true
+      },
+      { quoted: quotedMsg }
+    );
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
+  }
+                }
