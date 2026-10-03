@@ -575,6 +575,17 @@ export const promoteUsers = promoteParticipants;
 export const demoteUsers = demoteParticipants;
 export const removeGroupUsers = kickParticipants;
 
+export async function handleJoinRequests(
+  sock: WASocket,
+  groupJid: string,
+  action: 'approve' | 'reject'
+): Promise<string> {
+  const res = await handlePendingRequests(sock, groupJid, action);
+  if (!res.success) return `Failed to ${action} join requests.`;
+  if (res.processedCount === 0) return `No pending join requests found.`;
+  return `Successfully ${action === 'approve' ? 'approved' : 'rejected'} ${res.processedCount} join request(s).`;
+}
+
 export async function setGroupEditSetting(sock: WASocket, groupJid: string, lock: boolean): Promise<boolean> {
   return setGroupSettingsLock(sock, groupJid, lock);
 }
