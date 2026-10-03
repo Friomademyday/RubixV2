@@ -46,4 +46,4 @@ export async function processVoiceCommands(
     console.error('Voice command processor error:', err);
     return false;
   }
-}p
+}
