@@ -1,10 +1,10 @@
-declare module 'ws';
-
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import WebSocket from 'ws';
 import { WASocket, WAMessage } from '@whiskeysockets/baileys';
+
+// @ts-ignore
+import WebSocket from 'ws';
 
 export const OUTPUT_FORMAT = {
   AUDIO_24KHZ_96KBITRATE_MONO_MP3: 'audio-24khz-96kbitrate-mono-mp3'
@@ -43,17 +43,18 @@ export class MsEdgeTTS {
         ws.send(ssmlMessage);
       });
 
-      ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+      ws.on('message', (data: any, isBinary: boolean) => {
         if (isBinary) {
+          const bufferData = Buffer.isBuffer(data) ? data : Buffer.from(data);
           if (!audioStarted) {
-            const headerIndex = Buffer.from(data as Buffer).indexOf(Buffer.from('Path:audio\r\n'));
+            const headerIndex = bufferData.indexOf(Buffer.from('Path:audio\r\n'));
             if (headerIndex !== -1) {
               audioStarted = true;
-              const audioData = (data as Buffer).slice(headerIndex + 12);
+              const audioData = bufferData.slice(headerIndex + 12);
               fileStream.write(audioData);
             }
           } else {
-            fileStream.write(data as Buffer);
+            fileStream.write(bufferData);
           }
         }
       });
@@ -97,4 +98,4 @@ export async function sendNaturalVoiceNote(
       fs.unlinkSync(tempFilePath);
     }
   }
-                }
+}
