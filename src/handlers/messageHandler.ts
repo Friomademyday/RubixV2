@@ -154,7 +154,7 @@ export async function handleGroupMessage(
 
   let placeholderMsg: WAMessage | undefined;
   try {
-    placeholderMsg = await sock.sendMessage(jid, { text: '_processing..._' }, { quoted: msg });
+    placeholderMsg = await sock.sendMessage(jid, { text: '_rubixing..._' }, { quoted: msg });
   } catch (err) {
     console.error('Failed placeholder message:', err);
     return;
