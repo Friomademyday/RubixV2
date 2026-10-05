@@ -88,7 +88,7 @@ export async function sendNaturalVoiceNote(
       jid,
       {
         audio: { url: tempFilePath },
-        mimetype: 'audio/mp4',
+        mimetype: 'audio/mpeg',
         ptt: true
       },
       { quoted: quotedMsg }
