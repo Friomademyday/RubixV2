@@ -15,6 +15,56 @@ const personaText = loadPersona();
 const WHATSAPP_LINK_REGEX = /(chat\.whatsapp\.com\/[A-Za-z0-9]{20,26}|whatsapp\.com\/channel\/[A-Za-z0-9]{20,26})/i;
 const STATUS_SHARE_REGEX = /(whatsapp\.com\/status\/|status@broadcast)/i;
 
+import { Type, FunctionDeclaration } from '@google/genai';
+
+const systemTools: FunctionDeclaration[] = [
+  {
+    name: 'manageGroupParticipants',
+    description: 'Add, remove, promote, or demote group participants.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: { 
+          type: Type.STRING, 
+          enum: ['remove', 'add', 'promote', 'demote'] 
+        },
+        jids: { 
+          type: Type.ARRAY, 
+          items: { type: Type.STRING },
+          description: 'Target user JIDs resolved by AI calculation.'
+        },
+        reason: { type: Type.STRING }
+      },
+      required: ['action', 'jids']
+    }
+  },
+  {
+    name: 'scheduleFutureTask',
+    description: 'Schedule any administrative or message action for a future time.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        actionType: { type: Type.STRING, description: 'The task to execute later.' },
+        executionTimeUnix: { type: Type.NUMBER, description: 'Target epoch timestamp in seconds.' },
+        payload: { type: Type.OBJECT, description: 'Arguments needed to execute the task.' }
+      },
+      required: ['actionType', 'executionTimeUnix']
+    }
+  },
+  {
+    name: 'generateMediaContent',
+    description: 'Generate images or synthesize natural voice notes.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        type: { type: Type.STRING, enum: ['image', 'voice'] },
+        promptOrText: { type: Type.STRING }
+      },
+      required: ['type', 'promptOrText']
+    }
+  }
+];
+
 function cleanPlainText(text: string): string {
   return text
     .replace(/[*_~`]/g, '')
