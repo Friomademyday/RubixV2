@@ -157,8 +157,8 @@ export async function handleGroupMessage(
   }
 
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
-  const senderIsAdmin = participantsData.some((p) => p.jid === senderJid && p.admin !== null);
-
+  const senderIsAdmin = participantsData.some((p) => p.jid === senderJid && Boolean(p.admin));
+  
   let placeholderMsg: WAMessage | undefined;
   try {
     placeholderMsg = await sock.sendMessage(jid, { text: '_rubixing..._' }, { quoted: msg });
