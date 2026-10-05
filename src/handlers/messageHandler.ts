@@ -151,13 +151,13 @@ export async function handleGroupMessage(
     groupMetadata = await sock.groupMetadata(jid);
     participantsData = groupMetadata.participants.map((p) => ({
       jid: p.id,
-      admin: p.admin !== null,
+      admin: Boolean(p.admin),
       isSuperAdmin: p.admin === 'superadmin'
     }));
   }
 
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
-  const senderIsAdmin: boolean = participantsData.some((p) => p.jid === senderJid && !!p.admin);
+  const senderIsAdmin: boolean = participantsData.some((p) => Boolean(p.jid === senderJid && p.admin));
   
   let placeholderMsg: WAMessage | undefined;
   try {
@@ -319,4 +319,4 @@ ${memoryBlock}`;
       await sock.sendMessage(jid, { text: 'System core processing error.', edit: placeholderMsg.key });
     }
   }
-    }
+}
