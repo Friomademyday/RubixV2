@@ -1,5 +1,5 @@
 import { WASocket, WAMessage, isJidGroup, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { loadPersona } from '../utils/persona.js';
 import { getGroupState } from '../config/groupState.js';
 import { getChatContext, formatContextForAI } from '../services/groupContextService.js';
@@ -14,8 +14,6 @@ import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory
 const personaText = loadPersona();
 const WHATSAPP_LINK_REGEX = /(chat\.whatsapp\.com\/[A-Za-z0-9]{20,26}|whatsapp\.com\/channel\/[A-Za-z0-9]{20,26})/i;
 const STATUS_SHARE_REGEX = /(whatsapp\.com\/status\/|status@broadcast)/i;
-
-import { Type, FunctionDeclaration } from '@google/genai';
 
 const systemTools: FunctionDeclaration[] = [
   {
@@ -137,7 +135,7 @@ export async function handleGroupMessage(
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
   const senderIsAdmin = participantsData.some((p) => p.jid === senderJid && p.admin !== null);
 
-  let placeholderMsg;
+  let placeholderMsg: WAMessage | undefined;
   try {
     placeholderMsg = await sock.sendMessage(jid, { text: '_processing..._' }, { quoted: msg });
   } catch (err) {
@@ -210,9 +208,13 @@ ${memoryBlock}`;
           if (isGroup && senderIsAdmin) {
             await sock.groupParticipantsUpdate(jid, jids, action as any);
             const statusText = `Successfully executed ${action} action on ${jids.length} participant(s).`;
-            await sock.sendMessage(jid, { text: statusText, edit: placeholderMsg.key });
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: statusText, edit: placeholderMsg.key });
+            }
           } else {
-            await sock.sendMessage(jid, { text: 'Admin privileges required to perform this action.', edit: placeholderMsg.key });
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: 'Admin privileges required to perform this action.', edit: placeholderMsg.key });
+            }
           }
         } else if (call.name === 'generateMediaContent') {
           const { type, promptOrText } = call.args as { type: string; promptOrText: string };
@@ -223,18 +225,22 @@ ${memoryBlock}`;
           }
         } else if (call.name === 'scheduleFutureTask') {
           const { actionType, executionTimeUnix, payload } = call.args as any;
-          await sock.sendMessage(jid, { text: `Task scheduled for execution at timestamp ${executionTimeUnix}.`, edit: placeholderMsg.key });
+          if (placeholderMsg?.key) {
+            await sock.sendMessage(jid, { text: `Task scheduled for execution at timestamp ${executionTimeUnix}.`, edit: placeholderMsg.key });
+          }
         }
       }
     } else {
       const rawReply = response.text || 'Process completed with no output.';
       const replyText = cleanPlainText(rawReply);
-      await sock.sendMessage(jid, { text: replyText, edit: placeholderMsg.key });
+      if (placeholderMsg?.key) {
+        await sock.sendMessage(jid, { text: replyText, edit: placeholderMsg.key });
+      }
     }
   } catch (error) {
     console.error('Executive Brain error:', error);
-    if (placeholderMsg && placeholderMsg.key) {
+    if (placeholderMsg?.key) {
       await sock.sendMessage(jid, { text: 'System core processing error.', edit: placeholderMsg.key });
     }
   }
-}
+      }
