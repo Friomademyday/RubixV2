@@ -281,14 +281,18 @@ ${memoryBlock}`;
           }
         } else if (call.name === 'generateMediaContent') {
           const { type, promptOrText } = call.args as { type: string; promptOrText: string };
-          if (placeholderMsg?.key) {
-            await sock.sendMessage(jid, { text: `Generating ${type}...`, edit: placeholderMsg.key });
-          }
           if (type === 'voice') {
             await processVoiceCommands(sock, jid, msg, promptOrText, ai);
+            if (placeholderMsg?.key) {
+              await deleteMessage(sock, jid, placeholderMsg);
+            }
           } else if (type === 'image') {
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: '_generating image..._', edit: placeholderMsg.key });
+            }
             await processMediaCommands(sock, jid, msg, promptOrText);
           }
+    }
         } else if (call.name === 'scheduleFutureTask') {
           const { actionType, executionTimeUnix } = call.args as any;
           if (placeholderMsg?.key) {
