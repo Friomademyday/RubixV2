@@ -18,19 +18,11 @@ const personaText = loadPersona();
 const WHATSAPP_LINK_REGEX = /(chat\.whatsapp\.com\/[A-Za-z0-9]{20,26}|whatsapp\.com\/channel\/[A-Za-z0-9]{20,26})/i;
 const STATUS_SHARE_REGEX = /(whatsapp\.com\/status\/|status@broadcast)/i;
 
-/**
- * Removes all markdown formatting symbols (*, _, ~, `, #, -, +, etc.)
- * leaving clean plain text.
- */
 function cleanPlainText(text: string): string {
   return text
-    // Remove bold/italic asterisks, underscores, tildes, and backticks
     .replace(/[*_~`]/g, '')
-    // Remove bullet point markers at the start of lines (- , + , * )
     .replace(/^[\s]*[-+*]\s+/gm, '')
-    // Remove header symbols (# Heading -> Heading)
     .replace(/^[\s]*#+\s+/gm, '')
-    // Clean up multiple empty line breaks
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -54,10 +46,8 @@ export async function handleGroupMessage(
     msg.message.videoMessage?.caption ||
     '';
 
-  // Fetch Group & User Context early so we have the sender's pushName
   const contextData = await getChatContext(sock, msg);
 
-  // Passive Anti-Link, Anti-Status, and Chat Memory recording
   if (isGroup) {
     const groupState = getGroupState(jid);
     if (groupState.antiLink === 1) {
@@ -67,7 +57,6 @@ export async function handleGroupMessage(
       }
     }
 
-    // Record every incoming group message into RAM buffer (0ms latency)
     recordGroupMessage(jid, msg, contextData.senderName);
   }
 
@@ -82,13 +71,13 @@ export async function handleGroupMessage(
   const isQuoted = botJid ? quotedParticipant === botJid : false;
   const hasNameTag = text.toLowerCase().includes('rubix');
 
-  if (!isMentioned && !isQuoted && !hasNameTag) return;
+  if (isGroup && !isMentioned && !isQuoted && !hasNameTag) {
+    return;
+  }
 
   const promptText = text.replace(/@\d+/g, '').replace(/rubix/gi, '').trim();
 
-  // Route commands through domain handlers before triggering Gemini AI
   if (isGroup) {
-    // 1. Admin Actions (Mute, Kick, Polls, Anti-link settings)
     const wasAdminHandled = await processAdminCommands(
       sock,
       jid,
@@ -99,7 +88,6 @@ export async function handleGroupMessage(
     );
     if (wasAdminHandled) return;
 
-    // 2. Natural Media Requests (Stickers, Audio conversions)
     const wasMediaHandled = await processMediaCommands(
       sock,
       jid,
@@ -108,7 +96,6 @@ export async function handleGroupMessage(
     );
     if (wasMediaHandled) return;
 
-    // 3. Utilities & Analytics (Chat summaries, Ghost members, Identity)
     const wasUtilityHandled = await processUtilityCommands(
       sock,
       jid,
@@ -119,7 +106,6 @@ export async function handleGroupMessage(
     );
     if (wasUtilityHandled) return;
 
-    // 4. Intelligent Live Search Capabilities
     const wasSearchHandled = await processSearchCommands(
       sock,
       jid,
@@ -130,7 +116,6 @@ export async function handleGroupMessage(
     );
     if (wasSearchHandled) return;
 
-    // 5. Natural Voice Note Synthesis
     const wasVoiceHandled = await processVoiceCommands(
       sock,
       jid,
@@ -141,7 +126,6 @@ export async function handleGroupMessage(
     if (wasVoiceHandled) return;
   }
 
-  // Decompose complex multi-task prompts through the Intent Matrix
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
   let taskExecutionLogs: string[] = [];
 
@@ -150,7 +134,6 @@ export async function handleGroupMessage(
     taskExecutionLogs = await executePolynomialTasks(sock, jid, senderJid, msg, pipeline);
   }
 
-  // Gemini Fallback & Comprehensive Task Response Processing
   let placeholderMsg;
   try {
     placeholderMsg = await sock.sendMessage(
@@ -230,7 +213,6 @@ Answer the active user using your persona while maintaining awareness of the cha
 
     const rawReply = response.text || 'Process completed with no output.';
 
-    // Clean all special symbols from the output before sending to WhatsApp
     const replyText = cleanPlainText(rawReply);
 
     if (placeholderMsg && placeholderMsg.key) {
@@ -248,4 +230,4 @@ Answer the active user using your persona while maintaining awareness of the cha
       });
     }
   }
-          }
+}
