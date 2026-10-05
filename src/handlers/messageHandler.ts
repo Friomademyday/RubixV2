@@ -37,6 +37,21 @@ const systemTools: FunctionDeclaration[] = [
     }
   },
   {
+    name: 'executeGroupAdminAction',
+    description: 'Execute group setting updates including group subject, description, icon/profile picture (pfp), mute/unmute, antilink, revoking invite links, tagall, and hidetag.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          enum: ['updateSubject', 'updateDescription', 'updatePfp', 'setMute', 'setUnmute', 'setAntiLink', 'revokeLink', 'getInviteLink', 'tagAll', 'hideTag']
+        },
+        value: { type: Type.STRING, description: 'New subject text, description text, or antilink toggle (1 or 0).' }
+      },
+      required: ['action']
+    }
+  },
+  {
     name: 'scheduleFutureTask',
     description: 'Schedule any administrative or message action for a future time.',
     parameters: {
@@ -105,14 +120,16 @@ export async function handleGroupMessage(
   }
 
   const rawBotId = sock.user?.id || '';
+  const botNumber = rawBotId.split(':')[0].split('@')[0];
   const botJid = jidNormalizedUser(rawBotId);
-  const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+  const contextInfo = msg.message.extendedTextMessage?.contextInfo || msg.message.imageMessage?.contextInfo || msg.message.videoMessage?.contextInfo;
 
-  const mentionedJids = (contextInfo?.mentionedJid || []).map((id) => jidNormalizedUser(id));
+  const rawMentions = contextInfo?.mentionedJid || [];
+  const mentionedJids = rawMentions.map((id) => jidNormalizedUser(id));
   const quotedParticipant = contextInfo?.participant ? jidNormalizedUser(contextInfo.participant) : '';
 
-  const isMentioned = botJid ? mentionedJids.includes(botJid) : false;
-  const isQuoted = botJid ? quotedParticipant === botJid : false;
+  const isMentioned = botJid ? (mentionedJids.includes(botJid) || rawMentions.some((m) => m.includes(botNumber))) : false;
+  const isQuoted = botJid ? (quotedParticipant === botJid || quotedParticipant.includes(botNumber)) : false;
   const hasNameTag = text.toLowerCase().includes('rubix');
 
   if (isGroup && !isMentioned && !isQuoted && !hasNameTag) {
@@ -216,21 +233,70 @@ ${memoryBlock}`;
               await sock.sendMessage(jid, { text: 'Admin privileges required to perform this action.', edit: placeholderMsg.key });
             }
           }
+        } else if (call.name === 'executeGroupAdminAction') {
+          const { action, value } = call.args as { action: string; value?: string };
+          if (!isGroup) {
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: 'This command can only be used in group chats.', edit: placeholderMsg.key });
+            }
+            continue;
+          }
+          if (!senderIsAdmin) {
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: 'Admin privileges required to perform group settings updates.', edit: placeholderMsg.key });
+            }
+            continue;
+          }
+
+          let actionSuccess = false;
+          if (action === 'updateSubject' && value) {
+            actionSuccess = await updateGroupSubject(sock, jid, value);
+          } else if (action === 'updateDescription' && value) {
+            actionSuccess = await updateGroupDescription(sock, jid, value);
+          } else if (action === 'updatePfp') {
+            actionSuccess = await updateGroupPfp(sock, jid, msg);
+          } else if (action === 'setMute') {
+            actionSuccess = await setGroupMute(sock, jid, true);
+          } else if (action === 'setUnmute') {
+            actionSuccess = await setGroupMute(sock, jid, false);
+          } else if (action === 'setAntiLink' && value) {
+            setAntiLinkState(jid, parseInt(value, 10));
+            actionSuccess = true;
+          } else if (action === 'revokeLink') {
+            actionSuccess = await revokeGroupLink(sock, jid);
+          } else if (action === 'getInviteLink') {
+            const link = await getGroupInviteLink(sock, jid);
+            if (placeholderMsg?.key) {
+              await sock.sendMessage(jid, { text: link ? `Group Invite Link: ${link}` : 'Failed to retrieve invite link.', edit: placeholderMsg.key });
+            }
+            continue;
+          } else if (action === 'tagAll') {
+            actionSuccess = await executeTagAll(sock, jid, value || 'Attention everyone');
+          } else if (action === 'hideTag') {
+            actionSuccess = await executeHideTag(sock, jid, value || 'Announcement');
+          }
+
+          if (placeholderMsg?.key) {
+            await sock.sendMessage(jid, { text: actionSuccess ? `Action ${action} executed successfully.` : `Failed to execute ${action}.`, edit: placeholderMsg.key });
+          }
         } else if (call.name === 'generateMediaContent') {
           const { type, promptOrText } = call.args as { type: string; promptOrText: string };
+          if (placeholderMsg?.key) {
+            await sock.sendMessage(jid, { text: `Generating ${type}...`, edit: placeholderMsg.key });
+          }
           if (type === 'voice') {
             await processVoiceCommands(sock, jid, msg, promptOrText, ai);
           } else if (type === 'image') {
             await processMediaCommands(sock, jid, msg, promptOrText);
           }
         } else if (call.name === 'scheduleFutureTask') {
-          const { actionType, executionTimeUnix, payload } = call.args as any;
+          const { actionType, executionTimeUnix } = call.args as any;
           if (placeholderMsg?.key) {
-            await sock.sendMessage(jid, { text: `Task scheduled for execution at timestamp ${executionTimeUnix}.`, edit: placeholderMsg.key });
+            await sock.sendMessage(jid, { text: `Task ${actionType} scheduled for timestamp ${executionTimeUnix}.`, edit: placeholderMsg.key });
           }
         }
       }
-    } else {
+        } else {
       const rawReply = response.text || 'Process completed with no output.';
       const replyText = cleanPlainText(rawReply);
       if (placeholderMsg?.key) {
