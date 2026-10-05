@@ -151,7 +151,7 @@ export async function handleGroupMessage(
     groupMetadata = await sock.groupMetadata(jid);
     participantsData = groupMetadata.participants.map((p) => ({
       jid: p.id,
-      admin: p.admin,
+      admin: p.admin !== null,
       isSuperAdmin: p.admin === 'superadmin'
     }));
   }
