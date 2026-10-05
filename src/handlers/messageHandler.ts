@@ -146,7 +146,7 @@ export async function handleGroupMessage(
   const promptText = text.replace(/@\d+/g, '').replace(/rubix/gi, '').trim();
 
   let groupMetadata = null;
-  let participantsData: any[] = [];
+  let participantsData: { jid: string; admin: boolean; isSuperAdmin: boolean }[] = [];
   if (isGroup) {
     groupMetadata = await sock.groupMetadata(jid);
     participantsData = groupMetadata.participants.map((p) => ({
@@ -157,7 +157,7 @@ export async function handleGroupMessage(
   }
 
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
-  const senderIsAdmin = participantsData.some((p) => p.jid === senderJid && Boolean(p.admin));
+  const senderIsAdmin: boolean = participantsData.some((p) => p.jid === senderJid && !!p.admin);
   
   let placeholderMsg: WAMessage | undefined;
   try {
