@@ -1,13 +1,20 @@
 import { WASocket, WAMessage, isJidGroup, jidNormalizedUser, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { loadPersona } from '../utils/persona.js';
-import { getGroupState } from '../config/groupState.js';
+import { getGroupState, setAntiLinkState } from '../config/groupState.js';
 import { getChatContext, formatContextForAI } from '../services/groupContextService.js';
-import { deleteMessage } from '../services/groupAdminService.js';
-import { processAdminCommands } from './adminHandler.js';
+import { 
+  deleteMessage, 
+  updateGroupSubject, 
+  updateGroupDescription, 
+  updateGroupPfp, 
+  setGroupMute, 
+  revokeGroupLink, 
+  getGroupInviteLink, 
+  executeTagAll, 
+  executeHideTag 
+} from '../services/groupAdminService.js';
 import { processMediaCommands } from './mediaHandler.js';
-import { processUtilityCommands } from './utilityHandler.js';
-import { processSearchCommands } from './searchHandler.js';
 import { processVoiceCommands } from './voiceHandler.js';
 import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory.js';
 
@@ -292,7 +299,6 @@ ${memoryBlock}`;
             }
             await processMediaCommands(sock, jid, msg, promptOrText);
           }
-    }
         } else if (call.name === 'scheduleFutureTask') {
           const { actionType, executionTimeUnix } = call.args as any;
           if (placeholderMsg?.key) {
@@ -300,7 +306,7 @@ ${memoryBlock}`;
           }
         }
       }
-        } else {
+    } else {
       const rawReply = response.text || 'Process completed with no output.';
       const replyText = cleanPlainText(rawReply);
       if (placeholderMsg?.key) {
@@ -313,4 +319,4 @@ ${memoryBlock}`;
       await sock.sendMessage(jid, { text: 'System core processing error.', edit: placeholderMsg.key });
     }
   }
-      }
+    }
