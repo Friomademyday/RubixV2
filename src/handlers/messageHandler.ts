@@ -10,11 +10,8 @@ import { processUtilityCommands } from './utilityHandler.js';
 import { processSearchCommands } from './searchHandler.js';
 import { processVoiceCommands } from './voiceHandler.js';
 import { recordGroupMessage, getFormattedGroupMemory } from '../agent/chatMemory.js';
-import { fastMatchIntents } from '../agent/intentMatrix.js';
-import { executePolynomialTasks } from '../agent/executor.js';
 
 const personaText = loadPersona();
-
 const WHATSAPP_LINK_REGEX = /(chat\.whatsapp\.com\/[A-Za-z0-9]{20,26}|whatsapp\.com\/channel\/[A-Za-z0-9]{20,26})/i;
 const STATUS_SHARE_REGEX = /(whatsapp\.com\/status\/|status@broadcast)/i;
 
@@ -56,7 +53,6 @@ export async function handleGroupMessage(
         return;
       }
     }
-
     recordGroupMessage(jid, msg, contextData.senderName);
   }
 
@@ -77,72 +73,25 @@ export async function handleGroupMessage(
 
   const promptText = text.replace(/@\d+/g, '').replace(/rubix/gi, '').trim();
 
+  let groupMetadata = null;
+  let participantsData: any[] = [];
   if (isGroup) {
-    const wasAdminHandled = await processAdminCommands(
-      sock,
-      jid,
-      msg,
-      promptText,
-      contextData,
-      botJid
-    );
-    if (wasAdminHandled) return;
-
-    const wasMediaHandled = await processMediaCommands(
-      sock,
-      jid,
-      msg,
-      promptText
-    );
-    if (wasMediaHandled) return;
-
-    const wasUtilityHandled = await processUtilityCommands(
-      sock,
-      jid,
-      msg,
-      promptText,
-      contextData,
-      ai
-    );
-    if (wasUtilityHandled) return;
-
-    const wasSearchHandled = await processSearchCommands(
-      sock,
-      jid,
-      msg,
-      promptText,
-      contextData,
-      ai
-    );
-    if (wasSearchHandled) return;
-
-    const wasVoiceHandled = await processVoiceCommands(
-      sock,
-      jid,
-      msg,
-      promptText,
-      ai
-    );
-    if (wasVoiceHandled) return;
+    groupMetadata = await sock.groupMetadata(jid);
+    participantsData = groupMetadata.participants.map((p) => ({
+      jid: p.id,
+      admin: p.admin,
+      isSuperAdmin: p.admin === 'superadmin'
+    }));
   }
 
   const senderJid = msg.key.participant || msg.key.remoteJid || '';
-  let taskExecutionLogs: string[] = [];
-
-  if (isGroup) {
-    const pipeline = fastMatchIntents(promptText);
-    taskExecutionLogs = await executePolynomialTasks(sock, jid, senderJid, msg, pipeline);
-  }
+  const senderIsAdmin = participantsData.some((p) => p.jid === senderJid && p.admin !== null);
 
   let placeholderMsg;
   try {
-    placeholderMsg = await sock.sendMessage(
-      jid,
-      { text: '_rubixing..._' },
-      { quoted: msg }
-    );
+    placeholderMsg = await sock.sendMessage(jid, { text: '_processing..._' }, { quoted: msg });
   } catch (err) {
-    console.error('Failed to send placeholder message:', err);
+    console.error('Failed placeholder message:', err);
     return;
   }
 
@@ -160,74 +109,82 @@ export async function handleGroupMessage(
       });
     }
 
-    let quotedMessageText = '';
-    if (contextInfo?.quotedMessage) {
-      quotedMessageText =
-        contextInfo.quotedMessage.conversation ||
-        contextInfo.quotedMessage.extendedTextMessage?.text ||
-        contextInfo.quotedMessage.imageMessage?.caption ||
-        contextInfo.quotedMessage.videoMessage?.caption ||
-        '';
-    }
-
     const environmentBlock = formatContextForAI(contextData);
     const memoryBlock = isGroup ? getFormattedGroupMemory(jid) : 'N/A';
-    const taskLogBlock = taskExecutionLogs.length > 0 ? taskExecutionLogs.join('\n') : 'No polynomial actions required.';
+    const currentTimeStr = new Date().toISOString();
 
-    const fullSystemInstruction = `${personaText}
+    const executiveSystemInstruction = `${personaText}
+
+SYSTEM ROLE:
+You are the central Executive Brain of the system. You possess tools that map directly to system handlers.
+Current ISO Time: ${currentTimeStr}
+Sender JID: ${senderJid}
+Sender is Group Admin: ${senderIsAdmin}
+
+OPERATIONAL LAWS:
+1. Distinguish between a standard conversation and an action request/task.
+2. If the prompt is an action request, choose the appropriate Tool Call and perform all necessary logic (such as calculating target JIDs based on percentages, country code prefixes, or scheduling times) using the provided PARTICIPANTS DATA.
+3. For administrative tasks (remove, add, promote, demote), verify that 'Sender is Group Admin' is true. If false, decline the request in text without invoking the tool.
+4. If no action is required, reply directly in plain text.
 
 CRITICAL FORMATTING INSTRUCTIONS:
-- You must output PLAIN TEXT ONLY.
-- DO NOT use any markdown characters: no asterisks (*), no underscores (_), no tildes (~), no backticks (\`), no hash tags (#), no hyphens (-), and no plus signs (+) for lists.
-- For list structures or clear formatting, use numbered lists (1., 2., 3.) or plain line breaks only.
-- Never wrap words in formatting symbols.
+- PLAIN TEXT ONLY.
+- DO NOT use markdown symbols (*, _, ~, \`, #, -, +).
+
+=== GROUP PARTICIPANTS DATA ===
+${JSON.stringify(participantsData)}
 
 === ENVIRONMENT DATA ===
 ${environmentBlock}
 
-=== EXECUTED SYSTEM ACTIONS ===
-${taskLogBlock}
-
 === RECENT CHAT MEMORY ===
-${memoryBlock}
-
-Answer the active user using your persona while maintaining awareness of the chat environment context, chat history, and any system actions executed above.`;
+${memoryBlock}`;
 
     let finalPrompt = promptText || (imageMsg ? 'Describe what is in this image.' : 'Hello!');
-
-    if (quotedMessageText) {
-      finalPrompt = `[HIGHLIGHTED/QUOTED MESSAGE BEING REPLIED TO]: "${quotedMessageText}"\n\n[USER QUESTION/COMMAND]: ${finalPrompt}`;
-    }
-
     contents.push(finalPrompt);
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash-lite',
       contents,
       config: {
-        systemInstruction: fullSystemInstruction,
-        temperature: 0.7,
-        maxOutputTokens: 300
+        systemInstruction: executiveSystemInstruction,
+        tools: [{ functionDeclarations: systemTools }],
+        temperature: 0.2
       }
     });
 
-    const rawReply = response.text || 'Process completed with no output.';
-
-    const replyText = cleanPlainText(rawReply);
-
-    if (placeholderMsg && placeholderMsg.key) {
-      await sock.sendMessage(jid, {
-        text: replyText,
-        edit: placeholderMsg.key
-      });
+    if (response.functionCalls && response.functionCalls.length > 0) {
+      for (const call of response.functionCalls) {
+        if (call.name === 'manageGroupParticipants') {
+          const { action, jids } = call.args as { action: string; jids: string[] };
+          if (isGroup && senderIsAdmin) {
+            await sock.groupParticipantsUpdate(jid, jids, action as any);
+            const statusText = `Successfully executed ${action} action on ${jids.length} participant(s).`;
+            await sock.sendMessage(jid, { text: statusText, edit: placeholderMsg.key });
+          } else {
+            await sock.sendMessage(jid, { text: 'Admin privileges required to perform this action.', edit: placeholderMsg.key });
+          }
+        } else if (call.name === 'generateMediaContent') {
+          const { type, promptOrText } = call.args as { type: string; promptOrText: string };
+          if (type === 'voice') {
+            await processVoiceCommands(sock, jid, msg, promptOrText, ai);
+          } else if (type === 'image') {
+            await processMediaCommands(sock, jid, msg, promptOrText);
+          }
+        } else if (call.name === 'scheduleFutureTask') {
+          const { actionType, executionTimeUnix, payload } = call.args as any;
+          await sock.sendMessage(jid, { text: `Task scheduled for execution at timestamp ${executionTimeUnix}.`, edit: placeholderMsg.key });
+        }
+      }
+    } else {
+      const rawReply = response.text || 'Process completed with no output.';
+      const replyText = cleanPlainText(rawReply);
+      await sock.sendMessage(jid, { text: replyText, edit: placeholderMsg.key });
     }
   } catch (error) {
-    console.error('Error generating content from Gemini:', error);
+    console.error('Executive Brain error:', error);
     if (placeholderMsg && placeholderMsg.key) {
-      await sock.sendMessage(jid, {
-        text: 'System core error. Try again.',
-        edit: placeholderMsg.key
-      });
+      await sock.sendMessage(jid, { text: 'System core processing error.', edit: placeholderMsg.key });
     }
   }
 }
